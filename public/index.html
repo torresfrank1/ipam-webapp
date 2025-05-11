@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>IPAM Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-light text-dark">
+<nav class="navbar navbar-dark bg-dark px-4">
+    <a class="navbar-brand" href="#">IPAM</a>
+    <button id="logout-btn" class="btn btn-outline-light">Log Out</button>
+</nav>
+
+<div class="container mt-4">
+    <h2>Welcome to IPAM</h2>
+    <form id="subnet-form" class="row g-3 my-4">
+        <div class="col-md-3"><input id="cidr" class="form-control" placeholder="CIDR e.g. 192.168.1.0/24" required></div>
+        <div class="col-md-3"><input id="description" class="form-control" placeholder="Description"></div>
+        <div class="col-md-3"><input id="location" class="form-control" placeholder="Location"></div>
+        <div class="col-md-2"><input id="vlan" class="form-control" placeholder="VLAN"></div>
+        <div class="col-md-1"><button class="btn btn-primary w-100">Add</button></div>
+    </form>
+
+    <div id="subnet-list"></div>
+</div>
+
+<script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+    import { SUPABASE_URL, SUPABASE_ANON_KEY } from '/src/db.js';
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const session = (await supabase.auth.getSession()).data.session;
+    if (!session || !session.user) window.location.href = 'login.html';
+
+    document.getElementById('logout-btn').onclick = async () => {
+        await supabase.auth.signOut();
+        window.location.href = 'login.html';
+    };
+
+    document.getElementById('subnet-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const cidr = document.getElementById('cidr').value;
+        const description = document.getElementById('description').value;
+        const location = document.getElementById('location').value;
+        const vlan = document.getElementById('vlan').value;
+        await supabase.from('subnets').insert([{ cidr, description, location, vlan }]);
+        e.target.reset();
+        loadSubnets();
+    };
+
+    document.getElementById('subnet-list').addEventListener('click', async (e) => {
+        if (e.target.classList.contains('delete-subnet')) {
+            const id = e.target.dataset.id;
+            if (confirm('Delete this subnet and all its IPs?')) {
+                await supabase.from('ips').delete().eq('subnet_id', id);
+                await supabase.from('subnets').delete().eq('id', id);
+                loadSubnets();
+            }
+        }
+        if (e.target.classList.contains('edit-subnet')) {
+            const id = e.target.dataset.id;
+            const { data: subnet } = await supabase.from('subnets').select('*').eq('id', id).single();
+            const cidr = prompt('Edit CIDR:', subnet.cidr);
+            const description = prompt('Edit Description:', subnet.description);
+            const location = prompt('Edit Location:', subnet.location);
+            const vlan = prompt('Edit VLAN:', subnet.vlan);
+            if (cidr) {
+                await supabase.from('subnets').update({ cidr, description, location, vlan }).eq('id', id);
+                loadSubnets();
+            }
+        }
+        if (e.target.classList.contains('delete-ip')) {
+            const id = e.target.dataset.id;
+            const subnetId = e.target.dataset.subnet;
+            if (confirm('Delete this IP address?')) {
+                await supabase.from('ips').delete().eq('id', id);
+                loadIps(subnetId);
+            }
+        }
+        if (e.target.classList.contains('edit-ip')) {
+            const id = e.target.dataset.id;
+            const currentIP = e.target.dataset.ip;
+            const currentLabel = e.target.dataset.label;
+            const subnetId = e.target.dataset.subnet;
+            const newIP = prompt('Edit IP address:', currentIP);
+            const newLabel = prompt('Edit label:', currentLabel);
+            if (newIP !== null) {
+                await supabase.from('ips').update({ ip_address: newIP, label: newLabel }).eq('id', id);
+                loadIps(subnetId);
+            }
+        }
+    });
+
+    document.getElementById('subnet-list').addEventListener('submit', async (e) => {
+        if (!e.target.matches('form[data-subnet-id]')) return;
+        e.preventDefault();
+        const subnetId = e.target.getAttribute('data-subnet-id');
+        const ip = e.target.ip_address.value;
+        const label = e.target.label.value;
+        await supabase.from('ips').insert([{ subnet_id: subnetId, ip_address: ip, label }]);
+        e.target.reset();
+        loadIps(subnetId);
+    });
+
+    async function loadSubnets() {
+        const { data: subnets } = await supabase.from('subnets').select('*').order('created_at');
+        const container = document.getElementById('subnet-list');
+        container.innerHTML = '';
+        if (!subnets || subnets.length === 0) {
+            container.innerHTML = '<p>No subnets found.</p>';
+            return;
+        }
+
+        for (const s of subnets) {
+            const card = document.createElement('div');
+            card.className = 'card mb-4';
+            card.innerHTML = `
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <div>
+              <strong>${s.cidr}</strong>
+              <span class="text-muted ms-2">${s.description || ''} | ${s.location || 'N/A'} | VLAN ${s.vlan || 'N/A'}</span>
+            </div>
+            <div>
+              <button class="btn btn-sm btn-outline-primary edit-subnet" data-id="${s.id}">Edit</button>
+              <button class="btn btn-sm btn-outline-danger delete-subnet" data-id="${s.id}">Delete</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <ul class="list-group mb-3" id="ip-list-${s.id}">Loading IPs...</ul>
+            <form class="row g-2" data-subnet-id="${s.id}">
+              <div class="col-md-5"><input class="form-control" name="ip_address" placeholder="IP Address" required></div>
+              <div class="col-md-5"><input class="form-control" name="label" placeholder="Label (optional)"></div>
+              <div class="col-md-2"><button class="btn btn-success w-100">Add IP</button></div>
+            </form>
+          </div>`;
+            container.appendChild(card);
+            await loadIps(s.id);
+        }
+    }
+
+    async function loadIps(subnetId) {
+        const { data: ips } = await supabase.from('ips').select('*').eq('subnet_id', subnetId);
+        const list = document.getElementById(`ip-list-${subnetId}`);
+        list.innerHTML = '';
+        if (!ips || ips.length === 0) {
+            list.innerHTML = '<li class="list-group-item text-muted">No IPs assigned.</li>';
+            return;
+        }
+        for (const ip of ips) {
+            const li = document.createElement('li');
+            li.className = 'list-group-item d-flex justify-content-between';
+            li.innerHTML = `<span>${ip.ip_address} <small class=\"text-muted\">${ip.label || ''}</small></span>
+          <div>
+            <button class=\"btn btn-sm btn-outline-primary edit-ip\" data-id=\"${ip.id}\" data-ip=\"${ip.ip_address}\" data-label=\"${ip.label || ''}\" data-subnet=\"${subnetId}\">Edit</button>
+            <button class=\"btn btn-sm btn-outline-danger delete-ip\" data-id=\"${ip.id}\" data-subnet=\"${subnetId}\">Delete</button>
+          </div>`;
+            list.appendChild(li);
+        }
+    }
+
+    loadSubnets();
+</script>
+<footer class="bg-light text-center text-muted py-3 mt-5 border-top">
+    <small>IPAM Dashboard – Version 1.0</small>
+</footer>
+</body>
+</html>
