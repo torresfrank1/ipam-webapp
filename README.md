@@ -25,7 +25,7 @@ A lightweight, self-deployable web-based IPAM system built with HTML/CSS/JS and 
 
 ### 1. Clone or Download the Repo
 ```bash
-git clone https://github.com/your-username/ipam-app.git
+git clone https://github.com/torresfrank1/ipam-app.git
 cd ipam-app
 ```
 
